@@ -1,3 +1,8 @@
+#include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 #include "systemcalls.h"
 
 /**
@@ -16,6 +21,12 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
+
+    int ret;
+    ret = system(cmd);
+    if (ret != 0){
+        return false;
+    }
 
     return true;
 }
@@ -38,6 +49,7 @@ bool do_exec(int count, ...)
 {
     va_list args;
     va_start(args, count);
+
     char * command[count+1];
     int i;
     for(i=0; i<count; i++)
@@ -58,10 +70,27 @@ bool do_exec(int count, ...)
  *   as second argument to the execv() command.
  *
 */
-
+    pid_t pid = fork();
+    if(pid == -1){
+        perror("fork failed");
+	va_end(args);
+	return false;
+    } else if (pid == 0){
+	printf("child pid is %d \n", pid);
+	execv(command[0], command);
+	perror("execv");
+	_exit(EXIT_FAILURE);
+    } else {
+        int status;
+	if(waitpid(pid, &status, 0) == -1){
+	    perror("waitpid");
+	    va_end(args);
+	    return false;
+	}
     va_end(args);
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    }
 
-    return true;
 }
 
 /**
@@ -93,7 +122,34 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *
 */
 
-    va_end(args);
+    pid_t pid = fork();
+    if(pid == -1){
+        perror("fork failed");
+        return false;
+    } else if (pid == 0){
+        int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+	if(fd < 0){
+	    perror("fd open");
+	    return false;
+	}
+	if(dup2(fd,1)<0){
+	    perror("dup2 failed");
+	    close(fd);
+	    return false;
+	}
+        execv(command[0], command);
+        perror("execv");
+        return false;
+	close(fd);
 
-    return true;
+    } else {
+        int status;
+        if(waitpid(pid, &status, 0) == -1){
+            perror("waitpid");
+            va_end(args);
+            return false;
+        }
+    va_end(args);
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    }
 }
