@@ -44,6 +44,7 @@ bool start_thread_obtaining_mutex(pthread_t *thread, pthread_mutex_t *mutex,int 
         ERROR_LOG("Memory allocation failed for struct thread_data\n");
         return false;
      }
+     thread_data->thread_complete_success = false;
      thread_data->wait_to_obtain_ms = wait_to_obtain_ms;
      thread_data->wait_to_release_ms = wait_to_release_ms;
      thread_data->mutex = mutex;
