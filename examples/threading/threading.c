@@ -15,11 +15,11 @@ void* threadfunc(void* thread_param)
     // hint: use a cast like the one below to obtain thread arguments from your parameter
     struct thread_data* thread_func_args = (struct thread_data *) thread_param;
     //Start a thread which sleeps @param wait_to_obtain_ms number of milliseconds
-    usleep(thread_func_args->wait_to_obtain_ms);
+    usleep(thread_func_args->wait_to_obtain_ms*1000);
     //obtains the mutex in @param mutex
     pthread_mutex_lock(thread_func_args->mutex);
     //holds for @param wait_to_release_ms milliseconds
-    usleep(thread_func_args->wait_to_release_ms);
+    usleep(thread_func_args->wait_to_release_ms*1000);
     //releases
     pthread_mutex_unlock(thread_func_args->mutex);
     
