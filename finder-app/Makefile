@@ -5,6 +5,8 @@ TARGET = writer
 SRC = writer.c
 OBJ = $(SRC:.c=.o)
 
+all: $(TARGET)
+
 default: $(TARGET)
 
 $(TARGET): $(OBJ)
