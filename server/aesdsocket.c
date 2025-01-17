@@ -9,6 +9,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <pthread.h>
 
 #define FILE_PATH "/var/tmp/aesdsocketdata"
 #define PORT 9000
@@ -16,6 +17,54 @@
 
 static int server_fd, new_socket;
 static FILE *file;
+pthread_mutex_t file_mutex;
+pthread_mutex_t send_mutex;
+volatile sig_atomic_t exit_flag = 0;
+
+typedef struct ThreadNode {
+    pthread_t thread_id;
+    struct ThreadNode *next;
+} ThreadNode;
+
+ThreadNode *thread_list = NULL;
+
+pthread_mutex_t thread_list_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+void add_thread(pthread_t thread_id) 
+{
+    pthread_mutex_lock(&thread_list_mutex);
+    
+    ThreadNode *new_node = malloc(sizeof(ThreadNode));
+    
+    if (!new_node) 
+    {
+        perror("Failed to allocate memory for thread node");
+        pthread_mutex_unlock(&thread_list_mutex);
+        return;
+    }
+    
+    new_node->thread_id = thread_id;
+    new_node->next = thread_list;
+    
+    thread_list = new_node;
+    pthread_mutex_unlock(&thread_list_mutex);
+}
+
+void join_and_remove_threads() 
+{
+    pthread_mutex_lock(&thread_list_mutex);
+    ThreadNode *current = thread_list;
+    
+    while (current) {
+        pthread_join(current->thread_id, NULL);
+        ThreadNode *temp = current;
+        current = current->next;
+        free(temp);
+    
+    }
+    thread_list = NULL;
+    pthread_mutex_unlock(&thread_list_mutex);
+}
 
 
 void become_daemon()
@@ -52,7 +101,8 @@ void become_daemon()
     open("/dev/null", O_RDWR);
 }
 
-char *readBuff(int server_fd){
+char *readBuff(int server_fd)
+{
     char buffer[BUFFER_SIZE] = {};
     char *result = NULL;
     size_t totalSize = 0;
@@ -89,13 +139,61 @@ char *readBuff(int server_fd){
     return result;
 }
 
+void *handle_client(void *args)
+{
+    int client_socket = *(int *)args;
+    free(args);
+    char *result = readBuff(client_socket);
+    if (!result) {
+        syslog(LOG_ERR, "Failed to read buffer");
+        close(client_socket);
+        return NULL;
+    }  	
+    
+    pthread_mutex_lock(&file_mutex);
+
+    file = fopen(FILE_PATH, "a");
+    if (file == NULL) {
+        syslog(LOG_ERR, "Failed to open file: %s", FILE_PATH);
+	free(result);
+	pthread_mutex_unlock(&file_mutex);
+	close(client_socket);
+        return NULL;
+    }
+	
+    fprintf(file, "%s", result);
+    fclose(file);
+    pthread_mutex_unlock(&file_mutex);
+	
+    pthread_mutex_lock(&send_mutex);
+    file = fopen(FILE_PATH, "r");
+    if (file == NULL) {
+        syslog(LOG_ERR, "Failed to open file: %s", FILE_PATH);
+	pthread_mutex_unlock(&send_mutex);
+	close(client_socket);
+        return NULL;
+    }
+
+    char buffer[BUFFER_SIZE] = {};
+    while(fgets(buffer, sizeof(buffer), file) != NULL){
+        if (send(client_socket, buffer, strlen(buffer), 0) == -1){
+            perror("Send failed");
+            break;
+        }
+    }
+    fclose(file);
+    pthread_mutex_unlock(&send_mutex);
+
+    close(client_socket);
+    return NULL;
+}
+
 
 void openSocket()
 {
     struct sockaddr_in address;
     int opt = 1;
     socklen_t addrlen = sizeof(address);
-    char buffer[BUFFER_SIZE];
 
     // Creating socket file descriptor
     if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
@@ -130,35 +228,35 @@ void openSocket()
     inet_ntop(AF_INET, &(address.sin_addr), ip4, INET_ADDRSTRLEN);
     syslog(LOG_INFO, "Accepted connection from: %s", ip4);
 
-    while(1){
+    while(!exit_flag){
         printf("waiting new connection\n");
         
 	if ((new_socket = accept(server_fd, (struct sockaddr*)&address,&addrlen))< 0)
 	{
             perror("accept failed");
-            exit(-1);
+	    continue;
         }
 
 	char ip4[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &(address.sin_addr), ip4, INET_ADDRSTRLEN);
         syslog(LOG_INFO, "Accepted connection from %s", ip4);
-
-	char *result = readBuff(new_socket);
-	fprintf(file, "%s", result);
 	
-	memset(buffer, 0, sizeof(buffer));
-	rewind(file);
-	while(fgets(buffer, sizeof(buffer), file) != NULL){
-	    if (send(new_socket, buffer, strlen(buffer), 0) == -1)
-	    {
-                perror("Send failed");
-                break;
-            }
-
-            // Clear the buffer before next use
-            memset(buffer, 0, sizeof(buffer));
+	int *client_socket_ptr = malloc(sizeof(int));
+	if(!client_socket_ptr){
+	    perror("memory allocation failed");
+	    close(new_socket);
+	    continue;
 	}
-	syslog(LOG_INFO, "Closed connection from %s", ip4);
+
+	*client_socket_ptr = new_socket;
+	pthread_t thread_id;
+        if (pthread_create(&thread_id, NULL, handle_client, client_socket_ptr) != 0) {
+            perror("Thread creation failed");
+            close(new_socket);
+            free(client_socket_ptr);
+        }else{
+	    add_thread(thread_id);
+	}
     }
     
 }
@@ -166,6 +264,7 @@ void openSocket()
 void handle_sig()
 {
     syslog(LOG_INFO, "Caught signal, exiting");
+    exit_flag = 1;
     
     //delete /var/tmp/aesdsocketdata
     if (remove(FILE_PATH) == 0) {
@@ -174,21 +273,54 @@ void handle_sig()
         printf("Error: Unable to delete the file.\n");
     }
 
-    //close socket
-    close(new_socket);
     close(server_fd);
 
-    //close file
-    fclose(file);
+    pthread_mutex_destroy(&file_mutex);
+    pthread_mutex_destroy(&send_mutex);
 
-    //close syslog
     closelog();
 
     exit(0);
 }
 
+void *append_timestamp(void *arg) 
+{
+    while (!exit_flag) {
+        char timestamp[BUFFER_SIZE];
+        time_t now = time(NULL);
+        struct tm *timeinfo = localtime(&now);
+
+        if (strftime(timestamp, sizeof(timestamp), "timestamp:%a, %d %b %Y %H:%M:%S %z\n", timeinfo) == 0) {
+            syslog(LOG_ERR, "Failed to format timestamp");
+            continue;
+        }
+
+        pthread_mutex_lock(&file_mutex);
+        FILE *file = fopen(FILE_PATH, "a");
+        if (file == NULL) {
+            syslog(LOG_ERR, "Failed to open file: %s", FILE_PATH);
+            pthread_mutex_unlock(&file_mutex);
+            continue;
+        }
+
+        fprintf(file, "%s", timestamp);
+        fclose(file);
+        pthread_mutex_unlock(&file_mutex);
+
+        sleep(10); // Sleep for 10 seconds
+    }
+
+    return NULL;
+}
+
 int main(int argc, char* argv[])
 {
+    if (access(FILE_PATH, F_OK) == 0) {
+        // File exists, attempt to delete it
+        if (remove(FILE_PATH) == 0) {
+            printf("File %s deleted successfully.\n", FILE_PATH);
+        }
+    }
 
     //register signal handler
     signal(SIGINT, handle_sig);
@@ -202,24 +334,26 @@ int main(int argc, char* argv[])
     //open syslog
     openlog("App_aesdsocket", LOG_PID | LOG_CONS, LOG_USER);
 
-    //Open file
-    file = fopen(FILE_PATH, "w+");
-    if (file == NULL) {
-        syslog(LOG_ERR, "Failed to open file: %s", FILE_PATH);
-        exit(-1);
+    pthread_mutex_init(&file_mutex, NULL);
+    pthread_mutex_init(&send_mutex, NULL);
+
+    pthread_t timestamp_thread;
+    if (pthread_create(&timestamp_thread, NULL, append_timestamp, NULL) != 0) {
+        perror("Failed to create timestamp thread");
+        exit(EXIT_FAILURE);
     }
 
     //Open socket and listen
     openSocket();
+
+    join_and_remove_threads();
+
+    pthread_join(timestamp_thread, NULL);    
     
-    //close socket
-    close(new_socket);
     close(server_fd);
-
-    //close file
-    fclose(file);
-
-    //close syslog
+    
+    pthread_mutex_destroy(&file_mutex);
+    pthread_mutex_destroy(&send_mutex);
     closelog();
     
     return 0;
