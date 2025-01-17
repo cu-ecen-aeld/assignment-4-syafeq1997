@@ -16,7 +16,7 @@
 #define BUFFER_SIZE 1024
 
 static int server_fd, new_socket;
-static FILE *file;
+//static FILE *file;
 pthread_mutex_t file_mutex;
 pthread_mutex_t send_mutex;
 volatile sig_atomic_t exit_flag = 0;
@@ -152,8 +152,8 @@ void *handle_client(void *args)
     
     pthread_mutex_lock(&file_mutex);
 
-    file = fopen(FILE_PATH, "a");
-    if (file == NULL) {
+    FILE *write_open = fopen(FILE_PATH, "a");
+    if (write_open == NULL) {
         syslog(LOG_ERR, "Failed to open file: %s", FILE_PATH);
 	free(result);
 	pthread_mutex_unlock(&file_mutex);
@@ -161,13 +161,14 @@ void *handle_client(void *args)
         return NULL;
     }
 	
-    fprintf(file, "%s", result);
-    fclose(file);
+    fprintf(write_open, "%s", result);
+    fclose(write_open);
     pthread_mutex_unlock(&file_mutex);
+    free(result);
 	
     pthread_mutex_lock(&send_mutex);
-    file = fopen(FILE_PATH, "r");
-    if (file == NULL) {
+    FILE *read_open = fopen(FILE_PATH, "r");
+    if (read_open == NULL) {
         syslog(LOG_ERR, "Failed to open file: %s", FILE_PATH);
 	pthread_mutex_unlock(&send_mutex);
 	close(client_socket);
@@ -175,13 +176,33 @@ void *handle_client(void *args)
     }
 
     char buffer[BUFFER_SIZE] = {};
-    while(fgets(buffer, sizeof(buffer), file) != NULL){
-        if (send(client_socket, buffer, strlen(buffer), 0) == -1){
+    //while(fgets(buffer, sizeof(buffer), file) != NULL){
+    //    if (send(client_socket, buffer, strlen(buffer), 0) == -1){
+    //        perror("Send failed");
+    //        break;
+    //    }
+    //}
+    while(1) {
+        // Check file pointer validity
+        if (read_open == NULL) break;
+        
+        // Read with error checking
+        if (fgets(buffer, sizeof(buffer), read_open) == NULL) {
+            if (ferror(read_open)){
+		perror("fgets failed");
+	    }
+            break;
+        }
+        
+        if (send(client_socket, buffer, strlen(buffer), 0) == -1) {
             perror("Send failed");
             break;
         }
     }
-    fclose(file);
+    //fclose(file);
+    if (read_open){
+        fclose(read_open);
+    }
     pthread_mutex_unlock(&send_mutex);
 
     close(client_socket);
@@ -315,12 +336,6 @@ void *append_timestamp(void *arg)
 
 int main(int argc, char* argv[])
 {
-    if (access(FILE_PATH, F_OK) == 0) {
-        // File exists, attempt to delete it
-        if (remove(FILE_PATH) == 0) {
-            printf("File %s deleted successfully.\n", FILE_PATH);
-        }
-    }
 
     //register signal handler
     signal(SIGINT, handle_sig);
