@@ -1,9 +1,9 @@
 # Variables
-CC = $(CROSS_COMPILE)gcc
-CFLAGS = -Wall -Werror -g -Wno-error=unused-variable
-TARGET = aesdsocket
-SRC = aesdsocket.c
-OBJ = $(SRC:.c=.o)
+CC ?= $(CROSS_COMPILE)gcc
+CFLAGS ?= -Wall -Werror -g -Wno-error=unused-variable
+TARGET ?= aesdsocket
+SRC ?= aesdsocket.c
+OBJ ?= $(SRC:.c=.o)
 
 all: $(TARGET)
 
