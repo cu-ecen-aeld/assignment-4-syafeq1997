@@ -4,6 +4,7 @@ CFLAGS ?= -Wall -Werror -g -Wno-error=unused-variable
 TARGET ?= aesdsocket
 SRC ?= aesdsocket.c
 OBJ ?= $(SRC:.c=.o)
+LDFLAGS ?= -lpthread -lrt
 
 all: $(TARGET)
 
