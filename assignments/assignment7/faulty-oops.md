@@ -7,13 +7,17 @@ The Oops was caused by a NULL pointer dereference in the faulty module’s write
 Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
 
 ## Faulty Module
-faulty: 'faulty_write+0x10/0x20 [faulty]'
-
+faulty: 
+```
+'faulty_write+0x10/0x20 [faulty]'
+```
 ## Function causing failure
-Function: 'faulty_write+0x10/0x20 [faulty]"
-
+Function: 
+```
+'faulty_write+0x10/0x20 [faulty]"
+```
 ## Callstack
-:
+```
  'faulty_write+0x10/0x20 [faulty]
  ksys_write+0x74/0x110
  __arm64_sys_write+0x1c/0x30
@@ -24,9 +28,9 @@ Function: 'faulty_write+0x10/0x20 [faulty]"
  el0t_64_sync_handler+0xf4/0x120
  el0t_64_sync+0x18c/0x190
 Code: d2800001 d2800000 d503233f d50323bf (b900003f)'
-
+```
 ## Full oops
-
+```
 'Unable to handle kernel NULL pointer dereference at virtual address 0000000000000000
 Mem abort info:
   ESR = 0x0000000096000045
@@ -69,6 +73,6 @@ Call trace:
  el0t_64_sync+0x18c/0x190
 Code: d2800001 d2800000 d503233f d50323bf (b900003f)
 ---[ end trace 0000000000000000 ]---'
-
+```
 
 
