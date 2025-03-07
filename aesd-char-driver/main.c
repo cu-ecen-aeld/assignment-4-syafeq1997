@@ -32,6 +32,8 @@ int aesd_open(struct inode *inode, struct file *filp)
     /**
      * TODO: handle open
      */
+    //retrive pointer of aesd_dev struct that contain specific member 'cdev'
+    filp->private_data = container_of(inode->i_cdev, struct aesd_dev, cdev);
     return 0;
 }
 
@@ -47,30 +49,200 @@ int aesd_release(struct inode *inode, struct file *filp)
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
                 loff_t *f_pos)
 {
-    ssize_t retval = 0;
     PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
     /**
      * TODO: handle read
      */
-    return retval;
+    ssize_t retval = 0;
+    struct aesd_dev *dev = filp->private_data;
+    struct aesd_buffer_entry *buff_entry;
+    size_t off;
+    PDEBUG("write %zu bytes with offset %lld", count, *f_pos);
+    /**
+     * TODO: handle read
+     */
+
+
+    if(mutex_lock_interruptible(&dev->mutex)){
+        return -ERESTARTSYS;
+    } 
+
+    buff_entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->cbuf, *f_pos, &off);
+    if (buff_entry)
+    {
+        ssize_t sz = buff_entry->size - off;
+	if (sz > count)
+	{
+	    sz = count;
+	}
+
+	if (copy_to_user(buf, buff_entry->buffptr + off, sz) != 0)
+	{
+	    retval = -EFAULT;
+	    goto exit;
+	}
+	*f_pos += sz;
+	retval = sz;
+    }
+
+    exit:
+        mutex_unlock(&dev->mutex);
+        return retval;
+
 }
 
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
                 loff_t *f_pos)
 {
     ssize_t retval = -ENOMEM;
+    struct aesd_dev *dev = filp->private_data;
+    char *new_buf;
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
     /**
      * TODO: handle write
      */
-    return retval;
+
+    if (mutex_lock_interruptible(&dev->mutex))
+    {
+        return -ERESTARTSYS;
+    }
+
+    new_buf = kmalloc(dev->bufferentry.size + count, GFP_KERNEL);
+
+    if(!new_buf)
+    {
+        retval = -ENOMEM;
+        goto exit;
+    }
+
+    //copy buffer to new buffer
+    if(dev->bufferentry.size)
+    {
+        memcpy(new_buf, dev->bufferentry.buffptr, dev->bufferentry.size);
+    }
+
+    if(copy_from_user(new_buf + dev->bufferentry.size, buf, count))
+    {
+        retval = -EFAULT;
+        goto exit;
+    }
+
+    kfree(dev->bufferentry.buffptr);
+    dev->bufferentry.buffptr = new_buf;
+    dev->bufferentry.size += count;
+    retval = count;
+
+
+    while (dev->bufferentry.size > 0)
+    {
+        char *p = memchr(dev->bufferentry.buffptr, '\n', dev->bufferentry.size);
+        struct aesd_buffer_entry entry;
+	    size_t sz;
+
+	    if (!p)
+	    {
+	        break;
+	    }
+
+	    sz = p + 1 - dev->bufferentry.buffptr;
+	    entry.buffptr = dev->bufferentry.buffptr;
+	    entry.size = sz;
+	    //kfree(aesd_circular_buffer_add_entry(&dev->cbuf, &entry));
+
+	    if (dev->bufferentry.size == sz)
+	    {
+	        dev->bufferentry.buffptr = NULL;
+	        dev->bufferentry.size = 0;
+	        break;
+	    }
+	    else
+	    {
+	        new_buf = kmemdup(dev->bufferentry.buffptr + sz, dev->bufferentry.size - sz, GFP_KERNEL);
+
+	        if (!new_buf)
+	        {
+	            retval = -ENOMEM;
+		        goto exit;
+	        }
+
+	    dev->bufferentry.buffptr = new_buf;
+	    dev->bufferentry.size -= sz;
+	}
+    }
+    exit:
+        mutex_unlock(&dev->mutex);
+        return retval;
 }
+
+//loff_t aesd_llseek(struct file *filp, loff_t offset, int whence)
+//{
+//    loff_t retval;
+//    loff_t total_size = 0;
+//    struct aesd_dev *ad = filp->private_data;
+//
+//    PDEBUG("Seek %llu bytes using whence=%d", offset, whence);
+//
+//    if (mutex_lock_interruptible(&ad->mutex))
+//    {
+//        return -ERESTARTSYS;
+//    }
+//
+//    total_size = (loff_t) aesd_get_total_size(&ad->cbuf);
+//    retval = fixed_size_llseek(filp, offset, whence, total_size);
+//
+//    mutex_unlock(&ad->mutex);
+//
+//    return retval;
+//}
+//
+//long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+//{
+//    loff_t offset = 0;
+//    struct aesd_dev *ad = filp->private_data;
+//    struct aesd_seekto seekto;
+//
+//    PDEBUG("Running ioctl command=%u", cmd);
+//
+//    if (cmd != AESDCHAR_IOCSEEKTO)
+//    {
+//        return -ENOTTY;
+//    }
+//
+//    if (copy_from_user(&seekto, (const void __user *)arg, sizeof(seekto)) != 0)
+//    {
+//        return -EFAULT;
+//    }
+//
+//    PDEBUG("Seekto=%d, offset=%d", seekto.write_cmd, seekto.write_cmd_offset);
+//
+//    if (mutex_lock_interruptible(&ad->mutex))
+//    {
+//        return -ERESTARTSYS;
+//    }
+//
+//    offset = (off_t) aesd_get_offset(&ad->cbuf, seekto.write_cmd, seekto.write_cmd_offset);
+//
+//    if (offset < 0)
+//    {
+//        offset = -EINVAL;
+//        goto exit;
+//    }
+//
+//    filp->f_pos = offset;
+//
+//exit:
+//    mutex_unlock(&ad->mutex);
+//    return offset;
+//}
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
     .write =    aesd_write,
     .open =     aesd_open,
-    .release =  aesd_release,
+    .release =  aesd_release
+    //.llseek         = aesd_llseek,
+    //.unlocked_ioctl = aesd_ioctl
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
@@ -101,11 +273,13 @@ int aesd_init_module(void)
         return result;
     }
     memset(&aesd_device,0,sizeof(struct aesd_dev));
-
+    
+    
     /**
      * TODO: initialize the AESD specific portion of the device
      */
-
+    mutex_init(&aesd_device.mutex);
+    aesd_circular_buffer_init(&aesd_device.cbuf);
     result = aesd_setup_cdev(&aesd_device);
 
     if( result ) {
